@@ -18,6 +18,7 @@ data DmgKind =
 	| Radiant
 	| Slashing
 	| Thunder
+	deriving (Eq, Ord, Show)
 
 isPhysical :: DmgKind -> Bool
 isPhysical Bludgeoning = True
@@ -25,7 +26,7 @@ isPhysical Piercing = True
 isPhysical Slashing = True
 isPhysical _ = False
 
-data Damage = Damage Int DmgKind
+data Damage = Damage Int DmgKind deriving (Eq, Show)
 
 dmgAmount :: Damage -> Int
 dmgAmount (Damage i _) = i

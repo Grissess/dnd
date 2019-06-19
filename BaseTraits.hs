@@ -1,5 +1,11 @@
 module BaseTraits where
 
+import qualified Data.Set as Set
+
+import Dice
+import Damage
+import Typeclasses
+
 data Abilities = Abilities {
 	str :: Int,
 	dex :: Int,
@@ -9,25 +15,73 @@ data Abilities = Abilities {
 	cha :: Int
 } deriving (Eq, Show)
 
+instance Default Abilities where
+	def = Abilities { str = 10, dex = 10, con = 10, int = 10, wis = 10, cha = 10 }
+
+data Ability = Str | Dex | Con | Int | Wis | Cha deriving (Eq, Ord, Show)
+
+class AbilityLike a where
+	abilityOf :: Ability -> a -> Int
+
+instance AbilityLike Abilities where
+	abilityOf Str = str
+	abilityOf Dex = dex
+	abilityOf Con = con
+	abilityOf Int = int
+	abilityOf Wis = wis
+	abilityOf Cha = cha
+
 newtype AScores = AScores Abilities deriving (Eq, Show)
 newtype AMods = AMods Abilities deriving (Eq, Show)
 
-mods :: AScores -> AMods
-mods (AScores ab) = AMods Abilities {
-	str = f $ str ab,
-	dex = f $ dex ab,
-	con = f $ con ab,
-	int = f $ int ab,
-	wis = f $ wis ab,
-	cha = f $ cha ab
-} where f n = floor $ (fromIntegral $ n - 10) / 2.0
+instance Default AScores where
+	def = AScores (def :: Abilities)
+
+instance Default AMods where
+	def = mods (def :: AScores)
+
+instance AbilityLike AScores where
+	abilityOf a (AScores ab) = abilityOf a ab
+
+instance AbilityLike AMods where
+	abilityOf a (AMods ab) = abilityOf a ab
+
+class HasMods a where
+	mods :: a -> AMods
+
+instance HasMods AScores where
+	mods (AScores ab) = AMods Abilities {
+		str = f $ str ab,
+		dex = f $ dex ab,
+		con = f $ con ab,
+		int = f $ int ab,
+		wis = f $ wis ab,
+		cha = f $ cha ab
+	} where f n = floor $ (fromIntegral $ n - 10) / 2.0
+
+class HasAbilities a where
+	abilities :: a -> Abilities
+
+instance HasAbilities AScores where
+	abilities (AScores ab) = ab
+
+instance HasAbilities AMods where
+	abilities (AMods ab) = ab
 
 data Size = Fine | Diminutive | Tiny | Small | Medium | Large | Huge | Gargantuan | Colossal | ColossalPlus deriving (Eq, Ord, Show)
 
-newtype Level = Level Int deriving (Eq, Show)
+class HasHitDie a where
+	hitDie :: a -> Die
 
-level :: Level -> Int
-level (Level l) = l
+-- 5e DMG, p. 276
+instance HasHitDie Size where
+	hitDie sz
+		| sz <= Tiny = D 4
+		| sz == Small = D 6
+		| sz == Medium = D 8
+		| sz == Large = D 10
+		| sz == Huge = D 12
+		| otherwise = D 20
 
 data CR =
 	  CR0
@@ -137,3 +191,86 @@ fromFloat f
 	| f <= 28.0 = CR28
 	| f <= 29.0 = CR29
 	| otherwise = CR30
+
+class HasProfBonus a where
+	profBonus :: a -> Int
+
+-- 5e DMG, p. 274
+instance HasProfBonus CR where
+	profBonus cr
+		| f < 5 = 2
+		| f < 9 = 3
+		| f < 13 = 4
+		| f < 17 = 5
+		| f < 21 = 6
+		| f < 25 = 7
+		| f < 29 = 8
+		| otherwise = 9
+		where f = floor $ toFloat cr
+
+data ACKind = Normal | UnarmoredDefense | Armor Int | ArmorDex Int | Natural Int
+
+data BaseCreature = BaseCreature {
+	ascores :: AScores,
+	acKind :: ACKind,
+	cr :: CR,
+	size :: Size,
+	hitDice :: Int,
+	hitDieOverride :: Maybe Die,  -- XXX Only a kludge until this is calculated from classes...
+	savingProfs :: Set.Set Ability,
+	immunities :: Set.Set DmgKind,
+	resistances :: Set.Set DmgKind,
+	vulnerabilities :: Set.Set DmgKind
+
+}
+
+instance Default BaseCreature where
+	def = BaseCreature {
+		ascores = def,
+		acKind = Normal,
+		cr = CR0,  -- Just your typical commoner...
+		size = Medium,
+		hitDice = 1,
+		hitDieOverride = Nothing,
+		savingProfs = Set.empty,
+		immunities = Set.empty,
+		resistances = Set.empty,
+		vulnerabilities = Set.empty
+	}
+
+instance HasMods BaseCreature where
+	mods = mods . ascores
+
+instance HasProfBonus BaseCreature where
+	profBonus = profBonus . cr
+
+instance HasHitDie BaseCreature where
+	hitDie BaseCreature { hitDieOverride = Just d } = d
+	hitDie bc = hitDie $ size bc
+
+expectedHitPoints :: BaseCreature -> Int
+expectedHitPoints bc = let
+	c = con $ abilities $ mods bc
+	dEx = (hitDice bc) `DTimes` ((Die $ hitDie bc) `DPlus` (Const c))
+	in floor $ expected dEx
+
+armorClass :: BaseCreature -> Int
+armorClass bc @ BaseCreature { acKind = Normal } = 10 + (dex $ abilities $ mods bc)
+armorClass bc @ BaseCreature { acKind = UnarmoredDefense } = let
+	m = abilities $ mods bc
+	in 10 + (dex m) + (con m)
+armorClass BaseCreature { acKind = Armor i } = i
+armorClass bc @ BaseCreature { acKind = ArmorDex i } = i + (dex $ abilities $ mods bc)
+armorClass BaseCreature { acKind = Natural i } = i
+
+dmgFactor :: BaseCreature -> DmgKind -> Float
+dmgFactor bc k = let
+	f = 1.0
+	f' = if k `Set.member` (immunities bc) then 0.0 else f
+	f'' = if k `Set.member` (resistances bc) then 0.5 * f' else f'
+	f''' = if k `Set.member` (vulnerabilities bc) then 2.0 * f'' else f''
+	in f'''
+
+savingMod :: BaseCreature -> Ability -> Int
+savingMod bc ab =
+	(ab `abilityOf` (mods bc)) + if ab `Set.member` (savingProfs bc) then (profBonus bc) else 0
