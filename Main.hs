@@ -28,10 +28,12 @@ main = do
 		hitDice = 10
 	}
 	let getbackere = (def :: BaseCreature) {
-		ascores = AScores (def :: Abilities) { dex = 28 },
+		ascores = AScores (def :: Abilities) { dex = 20 },
 		hitDice = 3,
 		size = Tiny,
-		hitDieOverride = Just (D 8)
+		cr = CR20,
+		hitDieOverride = Just (D 8),
+		savingProfs = Set.singleton Dex
 	}
 	let scaly = (def :: BaseCreature) {
 		ascores = AScores Abilities { str = 30, dex = 14, con = 29, int = 18, wis = 17, cha = 28 },
