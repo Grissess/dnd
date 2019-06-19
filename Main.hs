@@ -28,7 +28,7 @@ main = do
 		hitDice = 10
 	}
 	let getbackere = (def :: BaseCreature) {
-		ascores = AScores (def :: Abilities) { dex = 20 },
+		ascores = AScores (def :: Abilities) { dex = 20, con = 20 },
 		hitDice = 3,
 		size = Tiny,
 		cr = CR20,
