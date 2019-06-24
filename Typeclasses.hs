@@ -14,3 +14,6 @@ instance (ExpectedValue a) => ExpectedValue (IIDSum a) where
 -- To the poor souls who have to hook this to Data.Default: I apologize in advance.
 class Default a where
 	def :: a
+
+class Identifiable a where
+	ident :: a -> Int

@@ -1,9 +1,14 @@
 module BaseTraits where
 
 import qualified Data.Set as Set
+import Data.List
+import Data.Maybe
+import Data.Function
+import Debug.Trace
 
 import Dice
 import Damage
+import Space
 import Typeclasses
 
 data Abilities = Abilities {
@@ -118,6 +123,7 @@ data CR =
 	| CR28
 	| CR29
 	| CR30
+	deriving (Eq, Ord, Show)
 
 toFloat :: CR -> Float
 toFloat CR0 = 0.0
@@ -195,7 +201,7 @@ fromFloat f
 class HasProfBonus a where
 	profBonus :: a -> Int
 
--- 5e DMG, p. 274
+-- 5e DMG, p. 274 
 instance HasProfBonus CR where
 	profBonus cr
 		| f < 5 = 2
@@ -208,19 +214,154 @@ instance HasProfBonus CR where
 		| otherwise = 9
 		where f = floor $ toFloat cr
 
+newtype AC = AC Int deriving (Eq, Ord, Show)
+
+acValue :: AC -> Int
+acValue (AC i) = i
+
+-- 5e DMG, p. 274 
+acForCR :: CR -> AC
+acForCR cr
+	| f < 4 = AC 13
+	| f < 5 = AC 14
+	| f < 8 = AC 15
+	| f < 10 = AC 16
+	| f < 13 = AC 17
+	| f < 17 = AC 18
+	| otherwise = AC 19
+	where f = floor $ toFloat cr
+
+newtype HP = HP Int deriving (Eq, Ord, Show)
+
+hpValue :: HP -> Int
+hpValue (HP i) = i
+
+-- 5e DMG, p. 274 
+crForHP :: HP -> CR
+crForHP hp
+	| h <= 6 = CR0
+	| h <= 35 = CROneEighth
+	| h <= 49 = CROneQuarter
+	| h <= 70 = CROneHalf
+	| h <= 85 = CR1
+	| h <= 100 = CR2
+	| h <= 115 = CR3
+	| h <= 130 = CR4
+	| h <= 145 = CR5
+	| h <= 160 = CR6
+	| h <= 175 = CR7
+	| h <= 190 = CR8
+	| h <= 205 = CR9
+	| h <= 220 = CR10
+	| h <= 235 = CR11
+	| h <= 250 = CR12
+	| h <= 265 = CR13
+	| h <= 280 = CR14
+	| h <= 295 = CR15
+	| h <= 310 = CR16
+	| h <= 325 = CR17
+	| h <= 340 = CR18
+	| h <= 355 = CR19
+	| h <= 400 = CR20
+	| h <= 445 = CR21
+	| h <= 490 = CR22
+	| h <= 535 = CR23
+	| h <= 580 = CR24
+	| h <= 625 = CR25
+	| h <= 670 = CR26
+	| h <= 715 = CR27
+	| h <= 760 = CR28
+	| h <= 805 = CR29
+	| otherwise = CR30  -- Technically capping at 850, but...
+	where h = hpValue hp
+
+-- 5e DMG, p. 274 
+expectedDamageCR :: Int -> CR
+expectedDamageCR d
+	| d <= 1 = CR0
+	| d <= 3 = CROneEighth
+	| d <= 5 = CROneQuarter
+	| d <= 8 = CROneHalf
+	| d <= 14 = CR1
+	| d <= 20 = CR2
+	| d <= 26 = CR3
+	| d <= 32 = CR4
+	| d <= 38 = CR5
+	| d <= 44 = CR6
+	| d <= 50 = CR7
+	| d <= 56 = CR8
+	| d <= 62 = CR9
+	| d <= 68 = CR10
+	| d <= 74 = CR11
+	| d <= 80 = CR12
+	| d <= 86 = CR13
+	| d <= 92 = CR14
+	| d <= 98 = CR15
+	| d <= 104 = CR16
+	| d <= 110 = CR17
+	| d <= 116 = CR18
+	| d <= 122 = CR19
+	| d <= 140 = CR20
+	| d <= 158 = CR21
+	| d <= 176 = CR22
+	| d <= 194 = CR23
+	| d <= 212 = CR24
+	| d <= 230 = CR25
+	| d <= 248 = CR26
+	| d <= 266 = CR27
+	| d <= 284 = CR28
+	| d <= 302 = CR29
+	| otherwise = CR30  -- Technically capping at 320
+
+-- 5e DMG, p. 274 
+toHitBonusForCR :: CR -> Int
+toHitBonusForCR cr
+	| f < 3 = 3
+	| f < 4 = 4
+	| f < 5 = 5
+	| f < 8 = 6
+	| f < 11 = 7
+	| f < 16 = 8
+	| f < 17 = 9
+	| f < 21 = 10
+	| f < 24 = 11
+	| f < 27 = 12
+	| f < 30 = 13
+	| otherwise = 14
+	where f = floor $ toFloat cr
+
+-- 5e DMG, p. 274 
+dcForCR :: CR -> Int
+dcForCR cr
+	| f < 4 = 13
+	| f < 5 = 14
+	| f < 8 = 15
+	| f < 11 = 16
+	| f < 13 = 17
+	| f < 17 = 18
+	| f < 21 = 19
+	| f < 24 = 20
+	| f < 27 = 21
+	| f < 30 = 22
+	| otherwise = 23
+	where f = floor $ toFloat cr
+
 data ACKind = Normal | UnarmoredDefense | Armor Int | ArmorDex Int | Natural Int
 
 data BaseCreature = BaseCreature {
 	ascores :: AScores,
 	acKind :: ACKind,
-	cr :: CR,
+	attacks :: [Attack],
 	size :: Size,
 	hitDice :: Int,
 	hitDieOverride :: Maybe Die,  -- XXX Only a kludge until this is calculated from classes...
+	maxAttacksPerRound :: Int,  -- XXX Eventually dependent; should depend on class feats (Extra Attack), Legendary Actions, etc.
+	expectedDamageRounds :: Int,
 	savingProfs :: Set.Set Ability,
 	immunities :: Set.Set DmgKind,
 	resistances :: Set.Set DmgKind,
-	vulnerabilities :: Set.Set DmgKind
+	vulnerabilities :: Set.Set DmgKind,
+	proficientAttacks :: Set.Set String
 
 }
 
@@ -228,14 +369,17 @@ instance Default BaseCreature where
 	def = BaseCreature {
 		ascores = def,
 		acKind = Normal,
-		cr = CR0,  -- Just your typical commoner...
+		attacks = defaultAttacks,
 		size = Medium,
 		hitDice = 1,
 		hitDieOverride = Nothing,
+		maxAttacksPerRound = 1,
+		expectedDamageRounds = 3,
 		savingProfs = Set.empty,
 		immunities = Set.empty,
 		resistances = Set.empty,
-		vulnerabilities = Set.empty
+		vulnerabilities = Set.empty,
+		proficientAttacks = Set.empty
 	}
 
 instance HasMods BaseCreature where
@@ -248,29 +392,315 @@ instance HasHitDie BaseCreature where
 	hitDie BaseCreature { hitDieOverride = Just d } = d
 	hitDie bc = hitDie $ size bc
 
-expectedHitPoints :: BaseCreature -> Int
+expectedHitPoints :: BaseCreature -> HP
 expectedHitPoints bc = let
 	c = con $ abilities $ mods bc
 	dEx = (hitDice bc) `DTimes` ((Die $ hitDie bc) `DPlus` (Const c))
-	in floor $ expected dEx
+	in HP $ floor $ expected dEx
 
-armorClass :: BaseCreature -> Int
-armorClass bc @ BaseCreature { acKind = Normal } = 10 + (dex $ abilities $ mods bc)
+armorClass :: BaseCreature -> AC
+armorClass bc @ BaseCreature { acKind = Normal } = AC $ 10 + (dex $ abilities $ mods bc)
 armorClass bc @ BaseCreature { acKind = UnarmoredDefense } = let
 	m = abilities $ mods bc
-	in 10 + (dex m) + (con m)
-armorClass BaseCreature { acKind = Armor i } = i
-armorClass bc @ BaseCreature { acKind = ArmorDex i } = i + (dex $ abilities $ mods bc)
-armorClass BaseCreature { acKind = Natural i } = i
+	in AC $ 10 + (dex m) + (con m)
+armorClass BaseCreature { acKind = Armor i } = AC i
+armorClass bc @ BaseCreature { acKind = ArmorDex i } = AC $ i + (dex $ abilities $ mods bc)
+armorClass BaseCreature { acKind = Natural i } = AC i
 
 dmgFactor :: BaseCreature -> DmgKind -> Float
 dmgFactor bc k = let
 	f = 1.0
-	f' = if k `Set.member` (immunities bc) then 0.0 else f
-	f'' = if k `Set.member` (resistances bc) then 0.5 * f' else f'
-	f''' = if k `Set.member` (vulnerabilities bc) then 2.0 * f'' else f''
+	f' = if k `isIn` (immunities bc) then 0.0 else f
+	f'' = if k `isIn` (resistances bc) then 0.5 * f' else f'
+	f''' = if k `isIn` (vulnerabilities bc) then 2.0 * f'' else f''
 	in f'''
+	where isIn = Set.member
 
 savingMod :: BaseCreature -> Ability -> Int
 savingMod bc ab =
 	(ab `abilityOf` (mods bc)) + if ab `Set.member` (savingProfs bc) then (profBonus bc) else 0
+
+isProficientAttack :: BaseCreature -> Attack -> Bool
+isProficientAttack bc atk = (name atk) `Set.member` (proficientAttacks bc)
+
+-- 5e DMG p. 278: calculate as the average over three rounds, but note that
+-- some creatures can still designate multiple attacks per round (Multiattack)
+-- and/or take multiple Attack actions (Extra Attack, Fury of Blows, ...)
+-- See offensiveCR for why the defensiveCR is used to calculate a prof bonus.
+bestAttackGivenHistory :: BaseCreature -> BaseCreature -> [Attack] -> Attack
+bestAttackGivenHistory ac dc atks = let
+	prb = profBonus $ defensiveCR ac
+	available = filter (\atk -> usableOnRound atk atks) $ attacks ac
+	atksDmgs = zip available $ map (\atk -> expectedDamageUsingProf atk ac dc prb) available
+	in fst $ maximumBy (compare `on` snd) atksDmgs
+
+nextAttackHistory :: BaseCreature -> BaseCreature -> [Attack] -> [Attack]
+-- Common optimization
+nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = 1 } dc atks =
+	atks ++ [bestAttackGivenHistory ac dc atks]
+-- XXX This use of Multiattack is probably not recommendable; the "history"
+-- should be refactored to be more expressive than just [Attack]
+nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = n } dc atks = let
+	nextAtk = bestAttackGivenHistory ac dc atks
+	nextHist = nextAttackHistory ac { maxAttacksPerRound = (n - 1) } dc $ atks ++ [nextAtk]
+	in atks ++ [mergeAtks nextAtk $ last nextHist]
+	where
+		mergeAtks Attack { name = a } Attack { name = b } = Multiattack { names = [a, b] }
+		mergeAtks Attack { name = a } Multiattack { names = bs } = Multiattack { names = a:bs }
+		mergeAtks Multiattack { names = as } Attack { name = b } = Multiattack { names = as ++ [b] }
+		mergeAtks Multiattack { names = as } Multiattack { names = bs } = Multiattack { names = as ++ bs }
+
+historyOfSize :: BaseCreature -> BaseCreature -> Int -> [Attack]
+historyOfSize _ _ 0 = []
+historyOfSize ac dc n = nextAttackHistory ac dc (historyOfSize ac dc $ n - 1)
+
+expectedDamageOutput :: BaseCreature -> BaseCreature -> Float
+expectedDamageOutput ac dc = let
+	prb = profBonus $ defensiveCR ac
+	hist = historyOfSize ac dc $ expectedDamageRounds ac
+	dmgs = map (\atk -> expectedDamageUsingProf atk ac dc prb) hist
+	total = sum dmgs
+	-- total' = trace ("edo total: " ++ (show total) ++ " parts: " ++ (show dmgs) ++ " prb: " ++ (show prb)) total
+	in total / (fromIntegral $ length hist)
+
+-- All CR calculation from 5e DMG pp. 274-5
+
+defensiveCR :: BaseCreature -> CR
+defensiveCR bc = let
+	crh = crForHP $ expectedHitPoints bc
+	rac = acValue $ armorClass bc
+	cac = acValue $ acForCR crh
+	adj = truncate $ (fromIntegral $ rac - cac) / 2.0
+	in fromFloat $ (toFloat crh) + (fromIntegral adj)
+
+-- XXX There's a dependency cycle where calculating overall attack bonus
+-- requires computing the proficiency bonus, which requires computing the CR,
+-- which calls back into this. A similar effect happens with save DCs. To avoid
+-- that, use the defensiveCR as an esimation of the final CR. This may not be
+-- numerically stable, or even guaranteed to converge.
+offensiveCRVsTarget :: BaseCreature -> BaseCreature -> CR
+offensiveCRVsTarget ac dc = let
+	crd = expectedDamageCR $ floor $ expectedDamageOutput ac dc
+	prb = profBonus $ defensiveCR ac
+	atb = maximum [overallAtkBonusUsingProf atk ac prb | atk <- attacks ac]
+	cab = toHitBonusForCR crd
+	ast = filter hasSavingThrow $ attacks ac
+	cdc = dcForCR crd
+	sdc = if (null ast) then cdc else maximum [saveDCUsingProf (save atk) ac prb | atk <- ast]
+	adjatk = truncate $ (fromIntegral $ atb - cab) / 2.0
+	adjdc = truncate $ (fromIntegral $ sdc - cdc) / 2.0
+	adj = max adjatk adjdc
+	in fromFloat $ (toFloat crd) + (fromIntegral adj)
+
+offensiveCR :: BaseCreature -> CR
+offensiveCR bc = offensiveCRVsTarget bc def
+
+cr :: BaseCreature -> CR
+cr bc = let
+	crf = ((toFloat $ defensiveCR bc) + (toFloat $ offensiveCR bc)) / 2.0
+	in if crf >= 1.0
+		then fromFloat $ fromIntegral $ ceiling crf
+		else fromFloat crf
+
+-- Former Attack module:
+
+class HasAtkModBonus a where
+	atkModBonus :: a -> AMods -> Int
+
+data AttackKind = Melee | Ranged | Special deriving (Eq, Show)
+
+instance HasAtkModBonus AttackKind where
+	atkModBonus Melee (AMods ab) = str ab
+	atkModBonus Ranged (AMods ab) = dex ab
+	atkModBonus Special _ = 0
+
+data Target = One | Area Area deriving (Show)
+
+data DmgRoll = DmgRoll DiceExpr DmgKind deriving (Show)
+
+dmgDEx :: DmgRoll -> DiceExpr
+dmgDEx (DmgRoll dex _) = dex
+
+instance HasDmgKind DmgRoll where
+	dmgKind (DmgRoll _ k) = k
+
+instance ExpectedValue DmgRoll where
+	expected = expected . dmgDEx
+
+data EffectDensity =
+	  Exactly Int
+	| AreaDensity Float  -- e.g., 0.04 is one per typical 5-foot-square
+	deriving (Show)
+
+data Save =
+	  NoSave
+	| SaveReduces { onPass :: Float, granting :: Ability, saving :: Ability }
+	deriving (Show)
+
+saveDCUsingProf :: Save -> BaseCreature -> Int -> Int
+-- Intentionally left unimplemented for NoSave--don't call that
+saveDCUsingProf SaveReduces { granting = gab } bc prb = 8 + prb + (gab `abilityOf` (mods bc))
+
+saveDC :: Save -> BaseCreature -> Int
+saveDC s bc = saveDCUsingProf s bc (profBonus bc)
+
+data Uses = Indefinite | PerDay Int | Recharge Int Die deriving (Show)
+
+data RechargeSimulation =
+	  Never
+	| AfterPassProbability Float
+	deriving (Show)
+
+data Attack = Attack {
+		name :: String,  -- Should be unique per creature--used to determine identity
+		baseDmgRolls :: [DmgRoll],  -- The first element of this should be the kind of damage to get the ability mod bonus
+		atkKind :: AttackKind,
+		toHitBonus :: Int,  -- The kind of thing that "magic +1" gives you
+		generalAtkBonus :: Int,  -- idem
+		save :: Save,
+		uses :: Uses,
+		rechargeSimulation :: RechargeSimulation,
+		target :: Target,  -- Overrides any EffectDensity
+		effectDensity :: EffectDensity,
+		range :: Int,
+		finesse :: Bool
+	}
+	| Multiattack {
+		names :: [String]
+	} deriving (Show)
+
+instance Default Attack where
+	def = Attack {
+		name = "UNSET",  -- This is likely to not be unique; it should be initialized
+		baseDmgRolls = [],  -- This is strictly illegal and must be later initialized
+		atkKind = Melee,    -- This shouldn't be depended upon as being the default--initialize explicitly
+		toHitBonus = 0,
+		generalAtkBonus = 0,
+		save = NoSave,
+		uses = Indefinite,
+		rechargeSimulation = Never,
+		target = One,
+		effectDensity = Exactly 2,  -- 5e DMG, p. 278, somewhat implicit
+		range = 5,
+		finesse = False
+	}
+
+defaultAttacks :: [Attack]
+defaultAttacks = [def {
+	name = "Punch",
+	baseDmgRolls = [DmgRoll (Const 1) Bludgeoning]
+}]
+
+instance HasAtkModBonus Attack where
+	atkModBonus Attack { finesse = False, atkKind = k } am = atkModBonus k am
+	atkModBonus Attack { finesse = True } am = max (atkModBonus Melee am) (atkModBonus Ranged am)
+
+isBaseAttack :: Attack -> Bool
+isBaseAttack Attack {} = True
+isBaseAttack _ = False
+
+isMultiattack :: Attack -> Bool
+isMultiattack Multiattack {} = True
+isMultiattack _ = False
+
+hasSavingThrow :: Attack -> Bool
+hasSavingThrow Attack { save = SaveReduces {}} = True
+hasSavingThrow _ = False
+
+lookupAttack :: BaseCreature -> String -> Maybe Attack
+lookupAttack bc nm = let
+	cands = filter (\at -> (name at) == nm) $ filter isBaseAttack $ attacks bc
+	in if (null cands) then Nothing else Just $ head cands
+
+lookupAttacks :: BaseCreature -> [String] -> [Attack]
+lookupAttacks bc nms = catMaybes $ map (lookupAttack bc) nms
+
+dmgRolls :: Attack -> BaseCreature -> [DmgRoll]
+dmgRolls atk @ Attack { baseDmgRolls = fdr:rdr } ac = let
+	bfdex = (dmgDEx fdr) `DPlus` (Const $ atkModBonus atk $ mods ac)
+	bfdr = DmgRoll bfdex $ dmgKind fdr
+	in bfdr:rdr
+dmgRolls Multiattack { names = nms } ac =
+	concat $ [dmgRolls at ac | at <- lookupAttacks ac nms]
+
+expectedTargets :: Attack -> Maybe BaseCreature -> Int
+expectedTargets Attack { target = One } _ = 1
+expectedTargets Attack { effectDensity = Exactly i } _ = i
+expectedTargets Attack { target = Area a, effectDensity = AreaDensity d } _ = 
+	ceiling $ d * effectFloorArea a
+-- This tends to be somewhat problematic with expectedDamage and might be removed
+expectedTargets Multiattack { names = nms } (Just bc) = let
+	ets = [expectedTargets at (Just bc) | at <- lookupAttacks bc nms]
+	in if (null ets) then trace ("no ets entries for matk with nms:" ++ (show nms)) 1 else maximum ets
+-- Hardly an advisable default
+expectedTargets Multiattack {} Nothing = 1
+
+-- Order is Attack, attacking creature, target creature
+expectedDamageUsingProf :: Attack -> BaseCreature -> BaseCreature -> Int -> Float
+expectedDamageUsingProf atk ac dc prb =
+	(fromIntegral $ expectedTargets atk $ Just ac) * (expectedDamageVsTargetUsingProf atk ac dc prb)
+
+expectedDamage :: Attack -> BaseCreature -> BaseCreature -> Float
+expectedDamage atk ac dc = expectedDamageUsingProf atk ac dc (profBonus ac)
+
+expectedDmgRollSumVsTarget :: BaseCreature -> [DmgRoll] -> Float
+expectedDmgRollSumVsTarget _ [] = 0
+expectedDmgRollSumVsTarget bc (dr:rst) =
+	(expected dr) * (dmgFactor bc $ dmgKind dr) + (expectedDmgRollSumVsTarget bc rst)
+
+-- See above
+expectedDamageVsTargetUsingProf :: Attack -> BaseCreature -> BaseCreature -> Int -> Float
+expectedDamageVsTargetUsingProf atk @ Attack { save = NoSave } ac dc _ =
+	((fromIntegral $ generalAtkBonus atk) + (expectedDmgRollSumVsTarget dc $ dmgRolls atk ac))
+expectedDamageVsTargetUsingProf atk @ Attack { save = SaveReduces { onPass = op, granting = g, saving = s } } ac dc prb = let
+	dsa = savingMod dc s
+	am = mods ac
+	asa = g `abilityOf` am
+	fullDmg = expectedDamageVsTarget atk { save = NoSave } ac dc
+	reducedDmg = fromIntegral $ floor $ op * fullDmg
+	-- cumProb is a bit weak at the moment, so shove every calculation possible into the DC instead of the DExpr
+	pPass = probCheckPasses (Die $ D 20) $ (8 + prb + asa) - dsa
+	in reducedDmg * pPass + fullDmg * (1.0 - pPass)
+expectedDamageVsTargetUsingProf Multiattack { names = nms } ac dc prb =
+	sum [expectedDamageVsTargetUsingProf at ac dc prb | at <- lookupAttacks ac nms]
+
+expectedDamageVsTarget :: Attack -> BaseCreature -> BaseCreature -> Float
+expectedDamageVsTarget atk ac dc = expectedDamageVsTargetUsingProf atk ac dc (profBonus ac)
+
+overallAtkBonusUsingProf :: Attack -> BaseCreature -> Int -> Int
+overallAtkBonusUsingProf atk @ Attack { toHitBonus = thb } ac prb =
+	thb + (atkModBonus atk $ mods ac) + (if (isProficientAttack ac atk) then prb else 0)
+overallAtkBonusUsingProf Multiattack { names = nms } ac prb =
+	maximum [overallAtkBonusUsingProf atk ac prb | atk <- lookupAttacks ac nms]
+
+overallAtkBonus :: Attack -> BaseCreature -> Int
+overallAtkBonus atk ac = overallAtkBonusUsingProf atk ac (profBonus ac)
+
+expectedHitAC :: Attack -> BaseCreature -> Float
+expectedHitAC atk @ Attack {} ac =
+	(expected $ Die $ D 20) + (fromIntegral $ overallAtkBonus atk ac)
+expectedHitAC Multiattack { names = nms } ac =
+	(sum [expectedHitAC at ac | at <- lookupAttacks ac nms]) / (fromIntegral $ length nms)
+
+-- Can the attack be used after the previous attacks?
+-- Mostly for the offensive CR calculation, where previous rounds are in lengths [0, 2].
+usableOnRound :: Attack -> [Attack] -> Bool
+--usableOnRound atk _ | trace ("usableOnRound: " ++ (show atk)) False = undefined
+usableOnRound Attack { uses = Indefinite } _ = True
+usableOnRound Attack { uses = PerDay i, name = nm } atks = let
+	diruses = length $ filter (==nm) $ map name $ filter isBaseAttack atks
+	indiruses = length $ filter (elem nm) $ map names $ filter isMultiattack atks
+	in diruses + indiruses < i
+usableOnRound Attack { uses = Recharge _ _, rechargeSimulation = Never } atks = null atks
+-- Recharge dice vs. threshold follows a binomial distribution.
+usableOnRound Attack { uses = Recharge t d, rechargeSimulation = AfterPassProbability passp, name = nm } atks = let
+	useidcs = findIndices namedAttackWasUsed atks
+	in if (null useidcs) then True else let
+		rounds = (length atks) - (last useidcs)
+		passProb = probCheckPasses (Die d) t
+		binomp = 1.0 - (1 - passProb)**(fromIntegral rounds)
+		in binomp >= passp
+	where
+		namedAttackWasUsed Attack { name = n } = n == nm
+		namedAttackWasUsed Multiattack { names = nms } = nm `elem` nms
+usableOnRound Multiattack {} _ = True

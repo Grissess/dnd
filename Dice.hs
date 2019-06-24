@@ -11,17 +11,36 @@ faces (D i) = i
 
 data DiceExpr = Die Die | DTimes Int DiceExpr | DPlus DiceExpr DiceExpr | Const Int deriving (Show)
 
-roll :: (RandomGen g) => g -> DiceExpr -> (Int, g)
-roll g (Die d) = randomR (1, faces d) g
-roll g (DTimes n ex) = cumulate 0 g n ex
+data DiceRoll = RDie Die Int | RDTimes Int DiceExpr [DiceRoll] | RDPlus DiceExpr DiceExpr DiceRoll DiceRoll | RConst Int deriving (Show)
+
+roll :: (RandomGen g) => g -> DiceExpr -> (DiceRoll, g)
+roll g (Die d) = (RDie d v, g')
+	where (v, g') = randomR (1, faces d) g
+roll g (DTimes n ex) = (RDTimes n ex v, g')
 	where
-		cumulate a g 0 ex = (a, g)
-		cumulate a g n ex = let (value, g') = roll g ex in cumulate (a + value) g' (n - 1) ex
+		(v, g') = cumulate g n ex
+		cumulate g 0 ex = ([], g)
+		cumulate g n ex = let
+			(value, g') = roll g ex
+			(rest, gf) = cumulate g' (n - 1) ex
+			in (value : rest, gf)
 roll g (DPlus xa xb) = let
 	(va, g') = roll g xa
 	(vb, g'') = roll g' xb
-	in (va + vb, g'')
-roll g (Const i) = (i, g)
+	in (RDPlus xa xb va vb, g'')
+roll g (Const i) = (RConst i, g)
+
+rollValue :: DiceRoll -> Int
+rollValue (RDie _ i) = i
+rollValue (RDTimes _ _ dr) = sum $ map rollValue dr
+rollValue (RDPlus _ _ va vb) = (rollValue va) + (rollValue vb)
+rollValue (RConst i) = i
+
+rollExpr :: DiceRoll -> DiceExpr
+rollExpr (RDie d _) = Die d
+rollExpr (RDTimes i x _) = DTimes i x
+rollExpr (RDPlus xa xb _ _) = DPlus xa xb
+rollExpr (RConst i) = Const i
 
 describe :: DiceExpr -> String
 describe (Die d) = 'd':(show $ faces d)
@@ -46,8 +65,8 @@ cumProb (Die (D d)) i
 	| otherwise = (fromIntegral $ i) / (fromIntegral d)
 -- A constant is a discretized Dirac delta distribution
 cumProb (Const c) i
-	| i <= c = 1.0
-	| otherwise = 0.0
+	| i < c = 0.0
+	| otherwise = 1.0
 
 -- The specific 5e variant
 probCheckPasses :: DiceExpr -> Int -> Float

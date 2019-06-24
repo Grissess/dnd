@@ -3,7 +3,6 @@ import qualified Data.Set as Set
 
 import Dice
 import BaseTraits
-import Attack
 import Space
 import Damage
 import Typeclasses
@@ -12,10 +11,12 @@ main :: IO ()
 main = do
 	let dex = (DPlus (DTimes 2 $ Die $ D 8) $ Const 2)
 	let sward = (def :: Attack) {
+		name = "sward",
 		baseDmgRolls = [DmgRoll dex Slashing, DmgRoll (6 `DTimes` (Die $ D 6)) Fire],
 		atkKind = Melee
 	}
 	let radiantBreadth = (def :: Attack) {  -- [sic]
+		name = "radiantBreadth",
 		baseDmgRolls = [DmgRoll (26 `DTimes` (Die $ D 6)) Fire],
 		atkKind = Special,
 		target = Area $ Cone 60,
@@ -31,7 +32,6 @@ main = do
 		ascores = AScores (def :: Abilities) { dex = 20, con = 20 },
 		hitDice = 3,
 		size = Tiny,
-		cr = CR20,
 		hitDieOverride = Just (D 8),
 		savingProfs = Set.singleton Dex
 	}
@@ -40,9 +40,29 @@ main = do
 		hitDice = 28,
 		size = Gargantuan,
 		acKind = Natural 22,
-		cr = CR24,
+		attacks = [def {
+			name = "Bite",
+			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 10)) Piercing],
+			range = 15
+		}, def {
+			name = "Claw",
+			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 6)) Slashing],
+			range = 10
+		}, def {
+			name = "Tail",
+			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 8)) Bludgeoning],
+			range = 10
+		}, Multiattack { names = ["Bite", "Claw", "Claw"] }, def {
+			name = "Fire Breath",
+			baseDmgRolls = [DmgRoll (13 `DTimes` (Die $ D 10)) Fire],
+			atkKind = Special,
+			target = Area $ Cone 90,
+			save = SaveReduces { onPass = 0.5, granting = Con, saving = Dex},
+			uses = Recharge 5 (D 6)
+		}],
 		savingProfs = Set.fromList [Dex, Con, Wis, Cha],
-		immunities = Set.singleton Fire
+		immunities = Set.singleton Fire,
+		proficientAttacks = Set.fromList ["Bite", "Claw", "Tail"]
 	}
 	putStrLn $ show dex
 	putStrLn $ describe dex
@@ -55,7 +75,7 @@ main = do
 	showHp "getbackere" getbackere
 	showHp "scaly" scaly
 	putStrLn "-- Sward (killa): "
-	putStrLn $ "expected target: " ++ (show $ expectedTargets sward)
+	putStrLn $ "expected target: " ++ (show $ expectedTargets sward $ Just killa)
 	putStrLn $ "expected damage vs skrub: " ++ (show $ expectedDamageVsTarget sward killa skrub)
 	putStrLn $ "expected damage vs getbackere: " ++ (show $ expectedDamageVsTarget sward killa getbackere)
 	putStrLn $ "expected damage vs scaly: " ++ (show $ expectedDamageVsTarget sward killa scaly)
@@ -63,7 +83,7 @@ main = do
 	putStrLn $ "total damage vs getbackere: " ++ (show $ expectedDamage sward killa getbackere)
 	putStrLn $ "total damage vs scaly: " ++ (show $ expectedDamage sward killa scaly)
 	putStrLn "-- RadiantBreadth (scaly): "
-	putStrLn $ "expected target: " ++ (show $ expectedTargets radiantBreadth)
+	putStrLn $ "expected target: " ++ (show $ expectedTargets radiantBreadth $ Just scaly)
 	putStrLn $ "expected damage vs skrub: " ++ (show $ expectedDamageVsTarget radiantBreadth scaly skrub)
 	putStrLn $ "expected damage vs getbackere: " ++ (show $ expectedDamageVsTarget radiantBreadth scaly getbackere)
 	putStrLn $ "expected damage vs scaly: " ++ (show $ expectedDamageVsTarget radiantBreadth scaly scaly)
@@ -74,7 +94,37 @@ main = do
 
 showHp :: String -> BaseCreature -> IO ()
 showHp nm bc = do
-	putStrLn $ "expected HP of " ++ nm ++ ": " ++ (show $ expectedHitPoints bc)
+	putStrLn $ "-----" ++ nm ++ "-----"
+	putStrLn $ "expected HP of: " ++ (show $ expectedHitPoints bc)
 	putStrLn $ "armorClass: " ++ (show $ armorClass bc)
 	putStrLn $ "aScores: " ++ (show $ ascores bc)
 	putStrLn $ "amods: " ++ (show $ mods bc)
+	putStrLn $ "defensiveCR: " ++ (show $ defensiveCR bc)
+	putStrLn $ "offensiveCR: " ++ (show $ offensiveCR bc)
+	putStrLn $ "CR: " ++ (show $ cr bc)
+	putStrLn $ "BON: " ++ (show $ profBonus bc)
+	putStrLn $ "Expected damage output: " ++ (show $ expectedDamageOutput bc def)
+	putStrLn $ "Damage history over 3 rounds:"
+	let hist = historyOfSize bc def 3
+	sequence_ [putStrLn $ "  " ++ (atid atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- hist]
+	let acts = [showAttack nm bc atk | atk <- attacks bc]
+	sequence_ acts
+	where
+		atid Attack { name = nm } = nm
+		atid Multiattack { names = nms } = "Multiattack of " ++ (show nms)
+
+showAttack :: String -> BaseCreature -> Attack -> IO ()
+showAttack nm bc atk @ Attack {} = do
+	putStrLn $ nm ++ "'s " ++ (name atk) ++ " attack:"
+	putStrLn $ "  Overall to hit bonus: " ++ (show $ overallAtkBonus atk bc)
+	showAttackCommon nm bc atk
+showAttack nm bc atk @ Multiattack { names = nms } = do
+	putStrLn $ nm ++ "'s multiattack with attacks " ++ (show nms) ++ ":"
+	showAttackCommon nm bc atk
+
+showAttackCommon :: String -> BaseCreature -> Attack -> IO ()
+showAttackCommon nm bc atk = do
+	putStrLn $ "  Expected targets: " ++ (show $ expectedTargets atk $ Just bc)
+	putStrLn $ "  Expected damage vs 1 target: " ++ (show $ expectedDamageVsTarget atk bc def)
+	putStrLn $ "  Expected overall damage: " ++ (show $ expectedDamage atk bc def)
+	putStrLn $ "  Expected hit AC: " ++ (show $ expectedHitAC atk bc)
