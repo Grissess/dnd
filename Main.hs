@@ -1,5 +1,6 @@
 import System.Random
 import qualified Data.Set as Set
+import qualified Data.Map as Map
 
 import Dice
 import BaseTraits
@@ -52,6 +53,12 @@ main = do
 			name = "Tail",
 			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 8)) Bludgeoning],
 			range = 10
+		}, def {
+			name = "Wing",
+			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 6)) Bludgeoning],
+			range = 15,
+			save = SaveReduces { onPass = 0.5, granting = Str, saving = Dex},
+			target = Area $ Sphere 15
 		}, Multiattack { names = ["Bite", "Claw", "Claw"] }, def {
 			name = "Fire Breath",
 			baseDmgRolls = [DmgRoll (13 `DTimes` (Die $ D 10)) Fire],
@@ -62,7 +69,8 @@ main = do
 		}],
 		savingProfs = Set.fromList [Dex, Con, Wis, Cha],
 		immunities = Set.singleton Fire,
-		proficientAttacks = Set.fromList ["Bite", "Claw", "Tail"]
+		proficientAttacks = Set.fromList ["Bite", "Claw", "Tail"],
+		legendaryAttacks = LegendaryAttacks 3 $ Map.fromList [("Tail", 1), ("Wing", 2)]
 	}
 	putStrLn $ show dex
 	putStrLn $ describe dex
@@ -103,10 +111,15 @@ showHp nm bc = do
 	putStrLn $ "offensiveCR: " ++ (show $ offensiveCR bc)
 	putStrLn $ "CR: " ++ (show $ cr bc)
 	putStrLn $ "BON: " ++ (show $ profBonus bc)
+	putStrLn $ "Expected SAV DC for this CR:" ++ (show $ dcForCR $ cr bc)
+	putStrLn $ "Expected attack bonus for this CR: " ++ (show $ toHitBonusForCR $ cr bc)
 	putStrLn $ "Expected damage output: " ++ (show $ expectedDamageOutput bc def)
 	putStrLn $ "Damage history over 3 rounds:"
-	let hist = historyOfSize bc def 3
+	let hist = historyOfSize bc def 3 (attacks bc) (const 1.0)
 	sequence_ [putStrLn $ "  " ++ (atid atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- hist]
+	putStrLn $ "Legendary attack history (per round):"
+	let lhist = legendaryAtkHistory bc def
+	sequence_ [putStrLn $ "  " ++ (atid atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- lhist]
 	let acts = [showAttack nm bc atk | atk <- attacks bc]
 	sequence_ acts
 	where
@@ -117,6 +130,9 @@ showAttack :: String -> BaseCreature -> Attack -> IO ()
 showAttack nm bc atk @ Attack {} = do
 	putStrLn $ nm ++ "'s " ++ (name atk) ++ " attack:"
 	putStrLn $ "  Overall to hit bonus: " ++ (show $ overallAtkBonus atk bc)
+	if (hasSavingThrow atk)
+		then putStrLn $ "  Save DC:" ++ (show $ saveDC (save atk) bc)
+		else pure ()
 	showAttackCommon nm bc atk
 showAttack nm bc atk @ Multiattack { names = nms } = do
 	putStrLn $ nm ++ "'s multiattack with attacks " ++ (show nms) ++ ":"
@@ -128,3 +144,4 @@ showAttackCommon nm bc atk = do
 	putStrLn $ "  Expected damage vs 1 target: " ++ (show $ expectedDamageVsTarget atk bc def)
 	putStrLn $ "  Expected overall damage: " ++ (show $ expectedDamage atk bc def)
 	putStrLn $ "  Expected hit AC: " ++ (show $ expectedHitAC atk bc)
+	putStrLn ""

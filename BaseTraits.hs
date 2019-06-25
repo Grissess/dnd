@@ -1,10 +1,12 @@
 module BaseTraits where
 
 import qualified Data.Set as Set
+import qualified Data.Map as Map
 import Data.List
 import Data.Maybe
 import Data.Function
 import Debug.Trace
+import Control.Monad.State.Lazy
 
 import Dice
 import Damage
@@ -348,6 +350,8 @@ dcForCR cr
 
 data ACKind = Normal | UnarmoredDefense | Armor Int | ArmorDex Int | Natural Int
 
+data LegendaryAttacks = LegendaryAttacks Int (Map.Map String Int)  -- total number, map from attack to cost
+
 data BaseCreature = BaseCreature {
 	ascores :: AScores,
 	acKind :: ACKind,
@@ -361,8 +365,8 @@ data BaseCreature = BaseCreature {
 	immunities :: Set.Set DmgKind,
 	resistances :: Set.Set DmgKind,
 	vulnerabilities :: Set.Set DmgKind,
-	proficientAttacks :: Set.Set String
-
+	proficientAttacks :: Set.Set String,
+	legendaryAttacks :: LegendaryAttacks
 }
 
 instance Default BaseCreature where
@@ -379,7 +383,8 @@ instance Default BaseCreature where
 		immunities = Set.empty,
 		resistances = Set.empty,
 		vulnerabilities = Set.empty,
-		proficientAttacks = Set.empty
+		proficientAttacks = Set.empty,
+		legendaryAttacks = LegendaryAttacks 0 Map.empty
 	}
 
 instance HasMods BaseCreature where
@@ -427,41 +432,70 @@ isProficientAttack bc atk = (name atk) `Set.member` (proficientAttacks bc)
 -- some creatures can still designate multiple attacks per round (Multiattack)
 -- and/or take multiple Attack actions (Extra Attack, Fury of Blows, ...)
 -- See offensiveCR for why the defensiveCR is used to calculate a prof bonus.
-bestAttackGivenHistory :: BaseCreature -> BaseCreature -> [Attack] -> Attack
-bestAttackGivenHistory ac dc atks = let
+bestAttackGivenHistory :: BaseCreature -> BaseCreature -> [Attack] -> (Attack -> Float) -> [Attack] -> Attack
+bestAttackGivenHistory ac dc atks cost hist = let
 	prb = profBonus $ defensiveCR ac
-	available = filter (\atk -> usableOnRound atk atks) $ attacks ac
-	atksDmgs = zip available $ map (\atk -> expectedDamageUsingProf atk ac dc prb) available
+	available = filter (\atk -> usableOnRound atk hist) atks
+	atksDmgs = zip available $ map (\atk -> (expectedDamageUsingProf atk ac dc prb) / (cost atk)) available
 	in fst $ maximumBy (compare `on` snd) atksDmgs
 
-nextAttackHistory :: BaseCreature -> BaseCreature -> [Attack] -> [Attack]
+nextAttackHistory :: BaseCreature -> BaseCreature -> [Attack] -> (Attack -> Float) -> [Attack] -> [Attack]
 -- Common optimization
-nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = 1 } dc atks =
-	atks ++ [bestAttackGivenHistory ac dc atks]
+nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = 1 } dc atks cost hist =
+	hist ++ [bestAttackGivenHistory ac dc atks cost hist]
 -- XXX This use of Multiattack is probably not recommendable; the "history"
 -- should be refactored to be more expressive than just [Attack]
-nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = n } dc atks = let
-	nextAtk = bestAttackGivenHistory ac dc atks
-	nextHist = nextAttackHistory ac { maxAttacksPerRound = (n - 1) } dc $ atks ++ [nextAtk]
-	in atks ++ [mergeAtks nextAtk $ last nextHist]
+nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = n } dc atks cost hist = let
+	nextAtk = bestAttackGivenHistory ac dc atks cost hist 
+	nextHist = nextAttackHistory ac { maxAttacksPerRound = (n - 1) } dc atks cost $ hist ++ [nextAtk]
+	in hist ++ [mergeAtks nextAtk $ last nextHist]
 	where
 		mergeAtks Attack { name = a } Attack { name = b } = Multiattack { names = [a, b] }
 		mergeAtks Attack { name = a } Multiattack { names = bs } = Multiattack { names = a:bs }
 		mergeAtks Multiattack { names = as } Attack { name = b } = Multiattack { names = as ++ [b] }
 		mergeAtks Multiattack { names = as } Multiattack { names = bs } = Multiattack { names = as ++ bs }
 
-historyOfSize :: BaseCreature -> BaseCreature -> Int -> [Attack]
-historyOfSize _ _ 0 = []
-historyOfSize ac dc n = nextAttackHistory ac dc (historyOfSize ac dc $ n - 1)
+historyOfSize :: BaseCreature -> BaseCreature -> Int -> [Attack] -> (Attack -> Float) -> [Attack]
+historyOfSize _ _ 0 _ _ = []
+historyOfSize ac dc n atks cost = nextAttackHistory ac dc atks cost (historyOfSize ac dc (n - 1) atks cost)
+
+legendaryAtks :: BaseCreature -> [(Attack,Int)]
+legendaryAtks bc @ BaseCreature { legendaryAttacks = LegendaryAttacks _ costmap } =
+	mapMaybe mapf $ Map.toList costmap
+	where
+		mapf (anm, cost) = mapinner (lookupAttack bc anm) cost
+		mapinner (Just atk) cost = Just (atk, cost)
+		mapinner Nothing _ = Nothing
+
+legendaryAtkHistory :: BaseCreature -> BaseCreature -> [Attack]
+-- Another common optimization
+legendaryAtkHistory ac @ BaseCreature { legendaryAttacks = LegendaryAttacks q _ } dc =
+	fst $ runState nextLegendary ([],q)
+	where
+		nextLegendary :: State ([Attack], Int) [Attack]
+		nextLegendary = do
+			(hist, quot) <- get
+			let acts = filter (\(a,c) -> c <= quot) $ legendaryAtks ac
+			if (null acts)
+				then return hist
+				else do
+					let next = bestAttackGivenHistory ac dc (map fst acts) (\act -> fromIntegral $ fromJust $ lookup act acts) hist
+					let hist' = hist ++ [next]
+					let quot' = quot - (fromJust $ lookup next acts)
+					put (hist', quot')
+					nextLegendary
 
 expectedDamageOutput :: BaseCreature -> BaseCreature -> Float
 expectedDamageOutput ac dc = let
 	prb = profBonus $ defensiveCR ac
-	hist = historyOfSize ac dc $ expectedDamageRounds ac
+	hist = historyOfSize ac dc (expectedDamageRounds ac) (attacks ac) (const 1.0)
+	lhist = legendaryAtkHistory ac dc
 	dmgs = map (\atk -> expectedDamageUsingProf atk ac dc prb) hist
 	total = sum dmgs
+	ldmgs = map (\atk -> expectedDamageUsingProf atk ac dc prb) lhist
+	ltotal = sum ldmgs
 	-- total' = trace ("edo total: " ++ (show total) ++ " parts: " ++ (show dmgs) ++ " prb: " ++ (show prb)) total
-	in total / (fromIntegral $ length hist)
+	in ltotal + total / (fromIntegral $ length hist)
 
 -- All CR calculation from 5e DMG pp. 274-5
 
@@ -475,13 +509,11 @@ defensiveCR bc = let
 
 -- XXX There's a dependency cycle where calculating overall attack bonus
 -- requires computing the proficiency bonus, which requires computing the CR,
--- which calls back into this. A similar effect happens with save DCs. To avoid
--- that, use the defensiveCR as an esimation of the final CR. This may not be
--- numerically stable, or even guaranteed to converge.
-offensiveCRVsTarget :: BaseCreature -> BaseCreature -> CR
-offensiveCRVsTarget ac dc = let
+-- which calls back into this. A similar effect happens with save DCs--thus all
+-- the xxxUsingProf functions.
+offensiveCRVsTargetUsingProf :: BaseCreature -> BaseCreature -> Int -> CR
+offensiveCRVsTargetUsingProf ac dc prb = let
 	crd = expectedDamageCR $ floor $ expectedDamageOutput ac dc
-	prb = profBonus $ defensiveCR ac
 	atb = maximum [overallAtkBonusUsingProf atk ac prb | atk <- attacks ac]
 	cab = toHitBonusForCR crd
 	ast = filter hasSavingThrow $ attacks ac
@@ -492,6 +524,15 @@ offensiveCRVsTarget ac dc = let
 	adj = max adjatk adjdc
 	in fromFloat $ (toFloat crd) + (fromIntegral adj)
 
+-- Attempt to find the fixed point of a CR/Prof cycle
+-- (credit to @Geometer1729)
+offensiveCRVsTarget :: BaseCreature -> BaseCreature -> CR
+offensiveCRVsTarget ac dc = let
+	crs = iterate (\(x,y) -> (y,step y)) (CR0, step CR0)
+	in fst $ head $ filter (uncurry (==)) crs
+	where
+		step cr = offensiveCRVsTargetUsingProf ac dc $ profBonus cr
+
 offensiveCR :: BaseCreature -> CR
 offensiveCR bc = offensiveCRVsTarget bc def
 
@@ -499,7 +540,7 @@ cr :: BaseCreature -> CR
 cr bc = let
 	crf = ((toFloat $ defensiveCR bc) + (toFloat $ offensiveCR bc)) / 2.0
 	in if crf >= 1.0
-		then fromFloat $ fromIntegral $ ceiling crf
+		then fromFloat $ fromIntegral $ floor crf
 		else fromFloat crf
 
 -- Former Attack module:
@@ -568,6 +609,9 @@ data Attack = Attack {
 	| Multiattack {
 		names :: [String]
 	} deriving (Show)
+
+instance Eq Attack where
+	a == b = (name a) == (name b)
 
 instance Default Attack where
 	def = Attack {
