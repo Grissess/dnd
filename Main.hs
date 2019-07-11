@@ -6,6 +6,7 @@ import Dice
 import BaseTraits
 import Space
 import Damage
+import Character
 import Typeclasses
 
 main :: IO ()
@@ -114,6 +115,47 @@ main = do
             proficientAttacks = Set.fromList ["Bite", "Claw", "Tail"],
             legendaryAttacks = LegendaryAttacks 3 $ Map.fromList [("Tail", 1), ("Fin", 2)]
     }
+	let wyrmy = (def :: BaseCreature) {
+		ascores = AScores Abilities { str = 27, dex = 12, con = 25, int = 20, wis = 17, cha = 19 },
+		hitDice = 22,
+		size = Gargantuan,
+		acKind = Natural 21,
+		actions = fromActionList [AttackAction $ def {
+			a_nm = "Bite",
+			baseDmgRolls = [
+				DmgRoll (2 `DTimes` (Die $ D 10)) Piercing,
+				DmgRoll (3 `DTimes` (Die $ D 6)) Poison
+			],
+			range = 15
+		}, AttackAction $ def {
+			a_nm = "Claw",
+			baseDmgRolls = [DmgRoll (4 `DTimes` (Die $ D 6)) Slashing],
+			range = 10
+		}, AttackAction $ def {
+			a_nm = "Tail",
+			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 8)) Bludgeoning],
+			range = 20
+		}, AttackAction $ def {
+			a_nm = "Wing",
+			baseDmgRolls = [DmgRoll (2 `DTimes` (Die $ D 6)) Bludgeoning],
+			target = Area $ Sphere 15,
+			save = SaveReduces { onPass = 0.5, granting = Str, saving = Dex },
+			range = 15
+		}, AttackAction $ Multiattack { names = ["Bite", "Claw", "Claw"] }, AttackAction $ def {
+			a_nm = "Poison Breath",
+			baseDmgRolls = [DmgRoll (22 `DTimes` (Die $ D 6)) Poison],
+			atkKind = Special,
+			target = Area $ Cone 90,
+			save = SaveReduces { onPass = 0.5, granting = Con, saving = Con },
+			uses = Recharge 5 (D 6),
+			range = 90
+		}],
+		attackActions = ["Bite", "Claw", "Tail", "Multiattack of Bite,Claw,Claw", "Poison Breath"],
+		savingProfs = Set.fromList [Dex, Con, Wis, Cha],
+		immunities = Set.singleton Poison,
+		proficientAttacks = Set.fromList ["Bite", "Claw", "Tail"],
+		legendaryAttacks = LegendaryAttacks 3 $ Map.fromList [("Tail", 1), ("Wing", 2)]
+	}
     putStrLn $ show dex
     putStrLn $ describe dex
     putStrLn $ show $ expected dex
@@ -125,6 +167,7 @@ main = do
     showHp "getbackere" getbackere
     showHp "scaly" scaly
     showHp "deepboi" deepboi
+	showHp "wyrmy" wyrmy
     putStrLn "-- Sward (killa): "
     putStrLn $ "expected target: " ++ (show $ expectedTargets sward $ Just killa)
     putStrLn $ "expected damage vs skrub: " ++ (show $ expectedDamageVsTarget sward killa skrub)
@@ -142,32 +185,28 @@ main = do
     putStrLn $ "total damage vs getbackere: " ++ (show $ expectedDamage radiantBreadth scaly getbackere)
     putStrLn $ "total damage vs scaly: " ++ (show $ expectedDamage radiantBreadth scaly scaly)
 
-
 showHp :: String -> BaseCreature -> IO ()
 showHp nm bc = do
-    putStrLn $ "-----" ++ nm ++ "-----"
-    putStrLn $ "expected HP of: " ++ (show $ expectedHitPoints bc)
-    putStrLn $ "armorClass: " ++ (show $ armorClass bc)
-    putStrLn $ "aScores: " ++ (show $ ascores bc)
-    putStrLn $ "amods: " ++ (show $ mods bc)
-    putStrLn $ "defensiveCR: " ++ (show $ defensiveCR bc)
-    putStrLn $ "offensiveCR: " ++ (show $ offensiveCR bc)
-    putStrLn $ "CR: " ++ (show $ cr bc)
-    putStrLn $ "BON: " ++ (show $ profBonus bc)
-    putStrLn $ "Expected SAV DC for this CR:" ++ (show $ dcForCR $ cr bc)
-    putStrLn $ "Expected attack bonus for this CR: " ++ (show $ toHitBonusForCR $ cr bc)
-    putStrLn $ "Expected damage output: " ++ (show $ expectedDamageOutput bc def)
-    putStrLn $ "Damage history over 3 rounds:"
-    let hist = historyOfSize bc def 3 (attacks bc) (const 1.0)
-    sequence_ [putStrLn $ "  " ++ (atid atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- hist]
-    putStrLn $ "Legendary attack history (per round):"
-    let lhist = legendaryAtkHistory bc def
-    sequence_ [putStrLn $ "  " ++ (atid atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- lhist]
-    let acts = [showAttack nm bc atk | atk <- attacks bc]
-    sequence_ acts
-    where
-        atid Attack { name = nm } = nm
-        atid Multiattack { names = nms } = "Multiattack of " ++ (show nms)
+	putStrLn $ "-----" ++ nm ++ "-----"
+	putStrLn $ "expected HP of: " ++ (show $ expectedHitPoints bc)
+	putStrLn $ "armorClass: " ++ (show $ armorClass bc)
+	putStrLn $ "aScores: " ++ (show $ ascores bc)
+	putStrLn $ "amods: " ++ (show $ mods bc)
+	putStrLn $ "defensiveCR: " ++ (show $ defensiveCR bc)
+	putStrLn $ "offensiveCR: " ++ (show $ offensiveCR bc)
+	putStrLn $ "CR: " ++ (show $ cr bc)
+	putStrLn $ "BON: " ++ (show $ profBonus bc)
+	putStrLn $ "Expected SAV DC for this CR:" ++ (show $ dcForCR $ cr bc)
+	putStrLn $ "Expected attack bonus for this CR: " ++ (show $ toHitBonusForCR $ cr bc)
+	putStrLn $ "Expected damage output: " ++ (show $ expectedDamageOutput bc def)
+	putStrLn $ "Damage history over 3 rounds:"
+	let hist = historyOfSize bc def 3 (attacks bc) (const 1.0)
+	sequence_ [putStrLn $ "  " ++ (name atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- hist]
+	putStrLn $ "Legendary attack history (per round):"
+	let lhist = legendaryAtkHistory bc def
+	sequence_ [putStrLn $ "  " ++ (name atk) ++ ": " ++ (show $ expectedDamage atk bc def) ++ " dmg" | atk <- lhist]
+	let acts = [showAttack nm bc atk | atk <- attacks bc]
+	sequence_ acts
 
 showAttack :: String -> BaseCreature -> Attack -> IO ()
 showAttack nm bc atk @ Attack {} = do

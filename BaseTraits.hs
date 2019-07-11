@@ -25,10 +25,11 @@ data Abilities = Abilities {
 instance Default Abilities where
 	def = Abilities { str = 10, dex = 10, con = 10, int = 10, wis = 10, cha = 10 }
 
-data Ability = Str | Dex | Con | Int | Wis | Cha deriving (Eq, Ord, Show)
+data Ability = Str | Dex | Con | Int | Wis | Cha deriving (Eq, Ord, Show, Bounded, Enum)
 
 class AbilityLike a where
 	abilityOf :: Ability -> a -> Int
+	setAbilityOf :: Ability -> Int -> a -> a
 
 instance AbilityLike Abilities where
 	abilityOf Str = str
@@ -37,6 +38,13 @@ instance AbilityLike Abilities where
 	abilityOf Int = int
 	abilityOf Wis = wis
 	abilityOf Cha = cha
+
+	setAbilityOf Str i ab = ab { str = i }
+	setAbilityOf Dex i ab = ab { dex = i }
+	setAbilityOf Con i ab = ab { con = i }
+	setAbilityOf Int i ab = ab { int = i }
+	setAbilityOf Wis i ab = ab { wis = i }
+	setAbilityOf Cha i ab = ab { cha = i }
 
 newtype AScores = AScores Abilities deriving (Eq, Show)
 newtype AMods = AMods Abilities deriving (Eq, Show)
@@ -49,9 +57,11 @@ instance Default AMods where
 
 instance AbilityLike AScores where
 	abilityOf a (AScores ab) = abilityOf a ab
+	setAbilityOf a i (AScores ab) = AScores $ setAbilityOf a i ab
 
 instance AbilityLike AMods where
 	abilityOf a (AMods ab) = abilityOf a ab
+	setAbilityOf a i (AMods ab) = AMods $ setAbilityOf a i ab
 
 class HasMods a where
 	mods :: a -> AMods
@@ -352,10 +362,32 @@ data ACKind = Normal | UnarmoredDefense | Armor Int | ArmorDex Int | Natural Int
 
 data LegendaryAttacks = LegendaryAttacks Int (Map.Map String Int)  -- total number, map from attack to cost
 
+legendaryQuota :: LegendaryAttacks -> Int
+legendaryQuota (LegendaryAttacks q _) = q
+
+legendaryCosts :: LegendaryAttacks -> Map.Map String Int
+legendaryCosts (LegendaryAttacks _ c) = c
+
+data Action =
+	  AttackAction Attack
+	deriving (Show)
+
+instance Named Action where
+	name (AttackAction a) = name a
+
+newtype ActionMap = ActionMap (Map.Map String Action) deriving (Show)
+
+actionMap :: ActionMap -> Map.Map String Action
+actionMap (ActionMap map) = map
+
+fromActionList :: [Action] -> ActionMap
+fromActionList acts = ActionMap $ Map.fromList $ zip (map name acts) acts
+
 data BaseCreature = BaseCreature {
 	ascores :: AScores,
 	acKind :: ACKind,
-	attacks :: [Attack],
+	actions :: ActionMap,
+	attackActions :: [String],
 	size :: Size,
 	hitDice :: Int,
 	hitDieOverride :: Maybe Die,  -- XXX Only a kludge until this is calculated from classes...
@@ -373,7 +405,8 @@ instance Default BaseCreature where
 	def = BaseCreature {
 		ascores = def,
 		acKind = Normal,
-		attacks = defaultAttacks,
+		actions = fromActionList $ map AttackAction defaultAttacks,
+		attackActions = map name defaultAttacks,
 		size = Medium,
 		hitDice = 1,
 		hitDieOverride = Nothing,
@@ -428,6 +461,17 @@ savingMod bc ab =
 isProficientAttack :: BaseCreature -> Attack -> Bool
 isProficientAttack bc atk = (name atk) `Set.member` (proficientAttacks bc)
 
+multiattacks :: BaseCreature -> [Attack]
+multiattacks bc = catMaybes $ map match $ Map.elems $ actionMap $ actions bc
+	where
+		match (AttackAction (atk @ Multiattack {})) = Just atk
+		match _ = Nothing
+
+-- XXX Referring to multiattack names in this list works, but is awkward. See
+-- the instance of Named for Attack below.
+attacks :: BaseCreature -> [Attack]
+attacks bc = lookupAttacks bc $ attackActions bc
+
 -- 5e DMG p. 278: calculate as the average over three rounds, but note that
 -- some creatures can still designate multiple attacks per round (Multiattack)
 -- and/or take multiple Attack actions (Extra Attack, Fury of Blows, ...)
@@ -450,9 +494,9 @@ nextAttackHistory ac @ BaseCreature { maxAttacksPerRound = n } dc atks cost hist
 	nextHist = nextAttackHistory ac { maxAttacksPerRound = (n - 1) } dc atks cost $ hist ++ [nextAtk]
 	in hist ++ [mergeAtks nextAtk $ last nextHist]
 	where
-		mergeAtks Attack { name = a } Attack { name = b } = Multiattack { names = [a, b] }
-		mergeAtks Attack { name = a } Multiattack { names = bs } = Multiattack { names = a:bs }
-		mergeAtks Multiattack { names = as } Attack { name = b } = Multiattack { names = as ++ [b] }
+		mergeAtks Attack { a_nm = a } Attack { a_nm = b } = Multiattack { names = [a, b] }
+		mergeAtks Attack { a_nm = a } Multiattack { names = bs } = Multiattack { names = a:bs }
+		mergeAtks Multiattack { names = as } Attack { a_nm = b } = Multiattack { names = as ++ [b] }
 		mergeAtks Multiattack { names = as } Multiattack { names = bs } = Multiattack { names = as ++ bs }
 
 historyOfSize :: BaseCreature -> BaseCreature -> Int -> [Attack] -> (Attack -> Float) -> [Attack]
@@ -593,7 +637,7 @@ data RechargeSimulation =
 	deriving (Show)
 
 data Attack = Attack {
-		name :: String,  -- Should be unique per creature--used to determine identity
+		a_nm :: String,  -- Should be unique per creature--used to determine identity
 		baseDmgRolls :: [DmgRoll],  -- The first element of this should be the kind of damage to get the ability mod bonus
 		atkKind :: AttackKind,
 		toHitBonus :: Int,  -- The kind of thing that "magic +1" gives you
@@ -610,12 +654,16 @@ data Attack = Attack {
 		names :: [String]
 	} deriving (Show)
 
+instance Named Attack where
+	name Attack {a_nm = nm} = nm
+	name Multiattack {names = nms} = "Multiattack of " ++ (intercalate "," nms)
+
 instance Eq Attack where
 	a == b = (name a) == (name b)
 
 instance Default Attack where
 	def = Attack {
-		name = "UNSET",  -- This is likely to not be unique; it should be initialized
+		a_nm = "UNSET",  -- This is likely to not be unique; it should be initialized
 		baseDmgRolls = [],  -- This is strictly illegal and must be later initialized
 		atkKind = Melee,    -- This shouldn't be depended upon as being the default--initialize explicitly
 		toHitBonus = 0,
@@ -631,7 +679,7 @@ instance Default Attack where
 
 defaultAttacks :: [Attack]
 defaultAttacks = [def {
-	name = "Punch",
+	a_nm = "Punch",
 	baseDmgRolls = [DmgRoll (Const 1) Bludgeoning]
 }]
 
@@ -653,8 +701,12 @@ hasSavingThrow _ = False
 
 lookupAttack :: BaseCreature -> String -> Maybe Attack
 lookupAttack bc nm = let
-	cands = filter (\at -> (name at) == nm) $ filter isBaseAttack $ attacks bc
-	in if (null cands) then Nothing else Just $ head cands
+	act = Map.lookup nm $ actionMap $ actions bc
+	in match act
+	where
+		match Nothing = Nothing
+		match (Just (AttackAction a)) = (Just a)
+		match (Just _) = Nothing
 
 lookupAttacks :: BaseCreature -> [String] -> [Attack]
 lookupAttacks bc nms = catMaybes $ map (lookupAttack bc) nms
@@ -731,13 +783,13 @@ expectedHitAC Multiattack { names = nms } ac =
 usableOnRound :: Attack -> [Attack] -> Bool
 --usableOnRound atk _ | trace ("usableOnRound: " ++ (show atk)) False = undefined
 usableOnRound Attack { uses = Indefinite } _ = True
-usableOnRound Attack { uses = PerDay i, name = nm } atks = let
+usableOnRound Attack { uses = PerDay i, a_nm = nm } atks = let
 	diruses = length $ filter (==nm) $ map name $ filter isBaseAttack atks
 	indiruses = length $ filter (elem nm) $ map names $ filter isMultiattack atks
 	in diruses + indiruses < i
 usableOnRound Attack { uses = Recharge _ _, rechargeSimulation = Never } atks = null atks
 -- Recharge dice vs. threshold follows a binomial distribution.
-usableOnRound Attack { uses = Recharge t d, rechargeSimulation = AfterPassProbability passp, name = nm } atks = let
+usableOnRound Attack { uses = Recharge t d, rechargeSimulation = AfterPassProbability passp, a_nm = nm } atks = let
 	useidcs = findIndices namedAttackWasUsed atks
 	in if (null useidcs) then True else let
 		rounds = (length atks) - (last useidcs)
@@ -745,6 +797,6 @@ usableOnRound Attack { uses = Recharge t d, rechargeSimulation = AfterPassProbab
 		binomp = 1.0 - (1 - passProb)**(fromIntegral rounds)
 		in binomp >= passp
 	where
-		namedAttackWasUsed Attack { name = n } = n == nm
+		namedAttackWasUsed Attack { a_nm = n } = n == nm
 		namedAttackWasUsed Multiattack { names = nms } = nm `elem` nms
 usableOnRound Multiattack {} _ = True

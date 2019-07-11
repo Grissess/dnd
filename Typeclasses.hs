@@ -17,3 +17,6 @@ class Default a where
 
 class Identifiable a where
 	ident :: a -> Int
+
+class Named a where
+	name :: a -> String
